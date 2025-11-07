@@ -33,6 +33,8 @@ def get_sequince_functions(
         logl = -np.inf * np.ones(len(particles), dtype=float)
         # Only evaluate the log likelihood for finite log prior
         logp = log_prior(particles)
+        if not any(np.isfinite(logp)):
+            return logl
         mask = np.isfinite(logp, dtype=bool)
         x = np.asarray(particles[mask, :], dtype=likelihood_dtype)
         logl[mask] = np.fromiter(
