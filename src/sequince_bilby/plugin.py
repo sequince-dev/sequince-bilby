@@ -47,12 +47,12 @@ class SequinceSMC(Sampler):
 
         self._setup_pool()
 
-        funcs = get_sequince_functions(
-            self.likelihood,
-            self.priors,
-            self.search_parameter_keys,
-            use_ratio=self.use_ratio,
-        )
+        if self.pool is not None:
+            map_fn = self.pool.map
+        else:
+            map_fn = map
+
+        funcs = get_sequince_functions(map_fn=map_fn)
 
         # Should handle these properly
         kwargs.pop("npool", None)
