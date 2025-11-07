@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=45", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sequince-bilby"
+authors = [
+    {name = "Michael J. Williams", email = "michaeljw1@googlemail.com"},
+]
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "bilby>=2.3.0",
+    "sequince",
+    "numpy",
+    "pandas",
+    "minipcn",
+]
+
+dynamic = ["version"]
+
+[tool.setuptools_scm]
+
+[dependency-groups]
+test = [
+    "pytest>=7.0",
+]
+
+[project.entry-points."bilby.samplers"]
+sequince-smc = "sequince_bilby.plugin:SequinceSMC"
+
+[tool.ruff]
+line-length = 79
+indent-width = 4
+target-version = "py310"
+
+[tool.ruff.lint]
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+extend-select = ["I"]
