@@ -6,7 +6,7 @@ import numpy as np
 from bilby.core.sampler.base_sampler import Sampler
 from bilby.core.utils import random
 from bilby.core.utils.log import logger
-from sequince.logging_utils import configure_logging
+from sequince.log import configure_logging
 from sequince.prebuilt_samplers import make_standard_bayesian_smc
 from sequince.state import ParticleState
 
@@ -16,7 +16,7 @@ from sequince_bilby.utils import get_sequince_functions
 class SequinceSMC(Sampler):
     """Bilby wrapper for sequince.
 
-    Sequince: https://github.com/mj-will/sequince
+    Sequince: https://github.com/sequince-dev/sequince
 
     """
 
@@ -61,7 +61,7 @@ class SequinceSMC(Sampler):
 
         logger.info(f"Creating sequince instance with kwargs: {kwargs}")
 
-        sampler, posterior, context = make_standard_bayesian_smc(
+        sampler, posterior, metadata = make_standard_bayesian_smc(
             log_prior=funcs.log_prior,
             log_likelihood=funcs.log_likelihood,
             **kwargs,
@@ -77,9 +77,7 @@ class SequinceSMC(Sampler):
             log_weights=log_weights,
         )
 
-        results = sampler.run(
-            initial_state, shared_context=context, rng=random.rng
-        )
+        results = sampler.run(initial_state, metadata=metadata, rng=random.rng)
 
         self._close_pool()
 
