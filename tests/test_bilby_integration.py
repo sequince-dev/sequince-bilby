@@ -7,6 +7,7 @@ import pytest
 from sequince.checkpoint import SMCCheckpoint
 
 from sequince_bilby.plugin import SequincePersistentSampling, SequinceSMC
+from sequince_bilby.proposal import BilbyPriorProposal
 
 
 def model(x, m, c):
@@ -110,6 +111,27 @@ def test_run_persistent_sampler(
         outdir=outdir,
         **ps_sampler_kwargs,
     )
+
+
+def test_run_sampler_with_custom_proposal(
+    bilby_likelihood,
+    bilby_priors,
+    tmp_path,
+    sampler_kwargs,
+):
+    proposal = BilbyPriorProposal(bilby_priors, ("m", "c"))
+    sampler = SequinceSMC(
+        likelihood=bilby_likelihood,
+        priors=bilby_priors,
+        outdir=tmp_path,
+        label="custom_proposal",
+        proposal=proposal,
+        **sampler_kwargs,
+    )
+
+    result = sampler.run_sampler()
+
+    assert result.samples.shape[1] == 2
 
 
 @pytest.mark.parametrize(
