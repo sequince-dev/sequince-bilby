@@ -2,6 +2,10 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
+from .proposal import BilbyPriorProposal
+
+__all__ = ["BilbyPriorProposal"]
+
 try:
     __version__ = version(__name__)
 except PackageNotFoundError:

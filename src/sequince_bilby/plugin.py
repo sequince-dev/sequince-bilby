@@ -16,9 +16,12 @@ from sequince.prebuilt_samplers import (
     make_persistent_bayesian_smc,
     make_standard_bayesian_smc,
 )
-from sequince.state import ParticleState, PersistentParticleState
+from sequince.proposals import draw_initial_state
+from sequince.state import PersistentParticleState
 from sequince.steps import StepContext
+from sequince.utils.random import resolve_rng
 
+from .proposal import BilbyPriorProposal
 from .utils import get_sequince_functions
 
 
@@ -51,6 +54,7 @@ class SequinceSMC(Sampler):
             checkpoint_filename=None,
             checkpoint_frequency=1,
             resume=True,
+            proposal=None,
         )
 
     def _configure_checkpointing(self, kwargs: dict) -> Path:
@@ -134,7 +138,14 @@ class SequinceSMC(Sampler):
     def run_sampler(self) -> dict:
         """Run the sampler."""
 
-        kwargs = copy.deepcopy(self.kwargs)
+        proposal = self.kwargs.get("proposal")
+        kwargs = copy.deepcopy(
+            {
+                key: value
+                for key, value in self.kwargs.items()
+                if key != "proposal"
+            }
+        )
 
         resume = kwargs.pop("resume")
         if not isinstance(resume, bool):
@@ -151,6 +162,7 @@ class SequinceSMC(Sampler):
             map_fn = map
 
         funcs = get_sequince_functions(map_fn=map_fn)
+        sampling_rng = resolve_rng(random.rng)
 
         # Should handle these properly
         kwargs.pop("npool", None)
@@ -158,6 +170,14 @@ class SequinceSMC(Sampler):
         kwargs.pop("sampling_seed", None)
 
         checkpoint_filename = self._configure_checkpointing(kwargs)
+
+        if proposal is None:
+            proposal = BilbyPriorProposal(
+                self.priors,
+                self.search_parameter_keys,
+            )
+        else:
+            kwargs["log_proposal"] = proposal
 
         if self._builder_accepts_n_particles:
             kwargs["n_particles"] = n_particles
@@ -174,19 +194,18 @@ class SequinceSMC(Sampler):
             self._load_checkpoint(checkpoint_filename) if resume else None
         )
         if checkpoint is None:
-            samples_dict = self.priors.sample(n_particles)
-            samples = np.array(
-                [samples_dict[key] for key in self.search_parameter_keys]
-            ).T
             context = StepContext(t=0, metadata=metadata)
-            initial_state = ParticleState(
-                samples,
-                evaluation=posterior.prepare_evaluation(samples, context),
+            initial_state = draw_initial_state(
+                proposal,
+                n_particles,
+                posterior=posterior,
+                context=context,
+                rng=sampling_rng,
             )
             result = sampler.run(
                 initial_state,
                 metadata=metadata,
-                rng=random.rng,
+                rng=sampling_rng,
             )
         else:
             self._restore_target_identity(posterior, checkpoint)
@@ -194,7 +213,7 @@ class SequinceSMC(Sampler):
                 logger.info("Checkpoint contains a completed sampling run.")
                 result = checkpoint.result()
             else:
-                runtime = sampler.resume_from(checkpoint, rng=random.rng)
+                runtime = sampler.resume_from(checkpoint, rng=sampling_rng)
                 result = sampler.run(runtime=runtime)
 
         result_file = self.get_result_file_name(self.outdir, self.label)
@@ -212,7 +231,7 @@ class SequinceSMC(Sampler):
 
         posterior_samples, _ = result.posterior_samples(
             method="rejection",
-            rng=random.rng,
+            rng=sampling_rng,
         )
         self.result.samples = posterior_samples
         self.result.log_evidence = result.log_evidence()
