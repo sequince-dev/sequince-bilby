@@ -1,29 +1,38 @@
 """Plugin for the sequince sampler in bilby."""
 
 import copy
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from bilby.core.sampler.base_sampler import Sampler
 from bilby.core.utils import random
 from bilby.core.utils.log import logger
 from sequince.log import configure_logging
-from sequince.prebuilt_samplers import make_standard_bayesian_smc
+from sequince.prebuilt_samplers import (
+    make_persistent_bayesian_smc,
+    make_standard_bayesian_smc,
+)
 from sequince.state import ParticleState
+from sequince.steps import StepContext
 
-from sequince_bilby.utils import get_sequince_functions
+from .utils import get_sequince_functions
 
 
 class SequinceSMC(Sampler):
-    """Bilby wrapper for sequince.
+    """Bilby wrapper for the sequential Monte Carlo sample from sequince.
 
     Sequince: https://github.com/sequince-dev/sequince
 
     """
 
-    sampler_name = "sequince"
+    sampler_name = "sequince-smc"
     """
     Name of the sampler.
     """
+
+    _prebuilt_fn = staticmethod(make_standard_bayesian_smc)
+    _builder_accepts_n_particles = False
 
     @property
     def external_sampler_name(self) -> str:
@@ -59,9 +68,12 @@ class SequinceSMC(Sampler):
         kwargs.pop("pool", None)
         kwargs.pop("sampling_seed", None)
 
+        if self._builder_accepts_n_particles:
+            kwargs["n_particles"] = n_particles
+
         logger.info(f"Creating sequince instance with kwargs: {kwargs}")
 
-        sampler, posterior, metadata = make_standard_bayesian_smc(
+        sampler, posterior, metadata = self._prebuilt_fn(
             log_prior=funcs.log_prior,
             log_likelihood=funcs.log_likelihood,
             **kwargs,
@@ -71,22 +83,42 @@ class SequinceSMC(Sampler):
         samples = np.array(
             [samples_dict[key] for key in self.search_parameter_keys]
         ).T
-        log_weights = np.full((n_particles,), -np.log(n_particles))
+        context = StepContext(t=0, metadata=metadata)
         initial_state = ParticleState(
             samples,
-            log_weights=log_weights,
+            evaluation=posterior.prepare_evaluation(samples, context),
         )
 
-        results = sampler.run(initial_state, metadata=metadata, rng=random.rng)
+        result = sampler.run(initial_state, metadata=metadata, rng=random.rng)
+
+        result_file = self.get_result_file_name(self.outdir, self.label)
+        result.save_to_file(result_file)
 
         self._close_pool()
 
-        self.result.samples = results.posterior_samples()
-        self.result.log_evidence = results.final_state.log_evidence
-        self.result.log_evidence_err = np.nan
+        weighted_samples, weights = result.posterior_samples(method="weights")
+        weighted_posterior = pd.DataFrame(
+            np.asarray(weighted_samples),
+            columns=self.search_parameter_keys,
+        )
+        weighted_posterior["weights"] = np.asarray(weights)
+        self.result.nested_samples = weighted_posterior
+
+        posterior_samples, _ = result.posterior_samples(
+            method="rejection",
+            rng=random.rng,
+        )
+        self.result.samples = posterior_samples
+        self.result.log_evidence = result.log_evidence()
+        self.result.log_evidence_err = result.log_evidence_error()
         self.result.num_likelihood_evaluations = np.nan
 
         return self.result
+
+    @classmethod
+    def get_result_file_name(cls, outdir, label):
+        sampler_name = cls.sampler_name.replace("-", "_")
+        return Path(outdir) / f"{label}_{sampler_name}_result.h5"
 
     @classmethod
     def get_expected_outputs(cls, outdir=None, label=None):
@@ -109,7 +141,7 @@ class SequinceSMC(Sampler):
         list
             List of directory names.
         """
-        filenames = []
+        filenames = [cls.get_result_file_name(outdir, label)]
         dirs = []
         return filenames, dirs
 
@@ -142,3 +174,14 @@ class SequinceSMC(Sampler):
                 if self._npool > 1:
                     kwargs["npool"] = self._npool
         super()._translate_kwargs(kwargs)
+
+
+class SequincePersistentSampling(SequinceSMC):
+    """Bilby wrapper for persistent sampling from sequince.
+
+    Sequince: https://github.com/sequince-dev/sequince
+    """
+
+    _prebuilt_fn = staticmethod(make_persistent_bayesian_smc)
+    _builder_accepts_n_particles = True
+    sampler_name = "sequince-ps"
