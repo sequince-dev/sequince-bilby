@@ -1,8 +1,12 @@
 from unittest.mock import patch
 
 import bilby
+import h5py
 import numpy as np
 import pytest
+from sequince.checkpoint import SMCCheckpoint
+
+from sequince_bilby.plugin import SequincePersistentSampling, SequinceSMC
 
 
 def model(x, m, c):
@@ -106,3 +110,80 @@ def test_run_persistent_sampler(
         outdir=outdir,
         **ps_sampler_kwargs,
     )
+
+
+@pytest.mark.parametrize(
+    ("sampler_class", "builder_kwargs"),
+    [
+        (
+            SequinceSMC,
+            {"max_delta": 0.1},
+        ),
+        (
+            SequincePersistentSampling,
+            {},
+        ),
+    ],
+)
+def test_resume_from_checkpoint(
+    sampler_class,
+    builder_kwargs,
+    bilby_likelihood,
+    bilby_priors,
+    tmp_path,
+):
+    priors = bilby.core.prior.PriorDict(
+        {
+            "m": bilby_priors["m"],
+            "c": bilby_priors["c"],
+        }
+    )
+    outdir = tmp_path / sampler_class.sampler_name
+    outdir.mkdir()
+    checkpoint_filename = outdir / "checkpoint.h5"
+
+    def stop_after_first_iteration(state, context, result):
+        del state, result
+        if context.t == 0:
+            return context.request_stop()
+        return None
+
+    initial_sampler = sampler_class(
+        likelihood=bilby_likelihood,
+        priors=priors,
+        outdir=outdir,
+        label="initial",
+        n_particles=10,
+        mutation="none",
+        logging_frequency=0,
+        callbacks=[stop_after_first_iteration],
+        checkpoint_filename=checkpoint_filename,
+        resume=False,
+        **builder_kwargs,
+    )
+    initial_sampler.run_sampler()
+
+    with h5py.File(checkpoint_filename, "r") as checkpoint_file:
+        initial_checkpoint = SMCCheckpoint.load_hdf5(checkpoint_file)
+    assert initial_checkpoint.next_iteration == 1
+
+    resumed_sampler = sampler_class(
+        likelihood=bilby_likelihood,
+        priors=priors,
+        outdir=outdir,
+        label="resumed",
+        n_particles=10,
+        mutation="none",
+        logging_frequency=0,
+        checkpoint_filename=checkpoint_filename,
+        resume=True,
+        **builder_kwargs,
+    )
+    result = resumed_sampler.run_sampler()
+
+    with h5py.File(checkpoint_filename, "r") as checkpoint_file:
+        resumed_checkpoint = SMCCheckpoint.load_hdf5(checkpoint_file)
+    assert (
+        resumed_checkpoint.next_iteration > initial_checkpoint.next_iteration
+    )
+    assert result.samples.shape[1] == 2
