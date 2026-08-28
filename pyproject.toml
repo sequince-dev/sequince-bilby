@@ -9,17 +9,16 @@ authors = [
 ]
 description = ""
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
     "bilby>=2.7.0",
-    "sequince",
     "numpy",
     "pandas",
-    "minipcn",
+    "sequince",
 ]
 
 dynamic = ["version"]
@@ -33,11 +32,12 @@ test = [
 
 [project.entry-points."bilby.samplers"]
 sequince-smc = "sequince_bilby.plugin:SequinceSMC"
+sequince-ps = "sequince_bilby.plugin:SequincePersistentSampling"
 
 [tool.ruff]
 line-length = 79
 indent-width = 4
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 # Allow fix for all enabled rules (when `--fix`) is provided.
