@@ -1,19 +1,22 @@
 """Plugin for the sequince sampler in bilby."""
 
 import copy
+from numbers import Integral
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 from bilby.core.sampler.base_sampler import Sampler
 from bilby.core.utils import random
 from bilby.core.utils.log import logger
+from sequince.checkpoint import HDF5CheckpointWriter, SMCCheckpoint
 from sequince.log import configure_logging
 from sequince.prebuilt_samplers import (
     make_persistent_bayesian_smc,
     make_standard_bayesian_smc,
 )
-from sequince.state import ParticleState
+from sequince.state import ParticleState, PersistentParticleState
 from sequince.steps import StepContext
 
 from .utils import get_sequince_functions
@@ -42,14 +45,100 @@ class SequinceSMC(Sampler):
     @property
     def default_kwargs(self) -> dict:
         """Dictionary of default keyword arguments."""
-        return dict(n_particles=500)
+        return dict(
+            n_particles=500,
+            checkpoint=True,
+            checkpoint_filename=None,
+            checkpoint_frequency=1,
+            resume=True,
+        )
+
+    def _configure_checkpointing(self, kwargs: dict) -> Path:
+        """Consume checkpoint options and add the configured writer."""
+        checkpoint = kwargs.pop("checkpoint")
+        checkpoint_filename = kwargs.pop("checkpoint_filename")
+        checkpoint_frequency = kwargs.pop("checkpoint_frequency")
+
+        if not isinstance(checkpoint, bool):
+            raise TypeError("checkpoint must be a boolean.")
+        if isinstance(checkpoint_frequency, bool) or not isinstance(
+            checkpoint_frequency, Integral
+        ):
+            raise TypeError("checkpoint_frequency must be a positive integer.")
+        if checkpoint_frequency <= 0:
+            raise ValueError(
+                "checkpoint_frequency must be a positive integer."
+            )
+
+        if checkpoint_filename is None:
+            checkpoint_filename = self.get_checkpoint_file_name(
+                self.outdir,
+                self.label,
+            )
+        checkpoint_filename = Path(checkpoint_filename)
+
+        if checkpoint:
+            checkpoint_writers = list(
+                kwargs.pop("checkpoint_writers", None) or ()
+            )
+            checkpoint_writers.append(
+                HDF5CheckpointWriter(
+                    checkpoint_filename,
+                    every=int(checkpoint_frequency),
+                )
+            )
+            kwargs["checkpoint_writers"] = checkpoint_writers
+
+        return checkpoint_filename
+
+    @staticmethod
+    def _load_checkpoint(checkpoint_filename: Path) -> SMCCheckpoint | None:
+        """Load a non-empty checkpoint, or return ``None`` if it is absent."""
+        if (
+            not checkpoint_filename.is_file()
+            or checkpoint_filename.stat().st_size == 0
+        ):
+            logger.info(
+                f"Checkpoint file {checkpoint_filename} does not exist."
+            )
+            return None
+
+        logger.info(f"Reading checkpoint file {checkpoint_filename}")
+        with h5py.File(checkpoint_filename, "r") as checkpoint_file:
+            return SMCCheckpoint.load_hdf5(checkpoint_file)
+
+    @staticmethod
+    def _restore_target_identity(posterior, checkpoint: SMCCheckpoint) -> None:
+        """Make the rebuilt target accept evaluations stored in a checkpoint."""
+        evaluation = checkpoint.state.evaluation
+        if evaluation is not None:
+            object.__setattr__(
+                posterior,
+                "_evaluation_id",
+                evaluation.target_id,
+            )
+
+    @staticmethod
+    def _checkpoint_is_complete(checkpoint: SMCCheckpoint) -> bool:
+        """Return whether a checkpoint already represents a completed run."""
+        if isinstance(checkpoint.state, PersistentParticleState):
+            return True
+        max_temperature = checkpoint.metadata.get("max_temperature")
+        temperature = checkpoint.metadata.get("temperature")
+        return (
+            max_temperature is not None
+            and temperature is not None
+            and float(temperature) >= float(max_temperature)
+        )
 
     def run_sampler(self) -> dict:
         """Run the sampler."""
 
         kwargs = copy.deepcopy(self.kwargs)
 
-        kwargs.pop("resume", None)
+        resume = kwargs.pop("resume")
+        if not isinstance(resume, bool):
+            raise TypeError("resume must be a boolean.")
         n_particles = kwargs.pop("n_particles")
 
         configure_logging(level=kwargs.pop("sequince_log_level", "INFO"))
@@ -68,6 +157,8 @@ class SequinceSMC(Sampler):
         kwargs.pop("pool", None)
         kwargs.pop("sampling_seed", None)
 
+        checkpoint_filename = self._configure_checkpointing(kwargs)
+
         if self._builder_accepts_n_particles:
             kwargs["n_particles"] = n_particles
 
@@ -79,17 +170,32 @@ class SequinceSMC(Sampler):
             **kwargs,
         )
 
-        samples_dict = self.priors.sample(n_particles)
-        samples = np.array(
-            [samples_dict[key] for key in self.search_parameter_keys]
-        ).T
-        context = StepContext(t=0, metadata=metadata)
-        initial_state = ParticleState(
-            samples,
-            evaluation=posterior.prepare_evaluation(samples, context),
+        checkpoint = (
+            self._load_checkpoint(checkpoint_filename) if resume else None
         )
-
-        result = sampler.run(initial_state, metadata=metadata, rng=random.rng)
+        if checkpoint is None:
+            samples_dict = self.priors.sample(n_particles)
+            samples = np.array(
+                [samples_dict[key] for key in self.search_parameter_keys]
+            ).T
+            context = StepContext(t=0, metadata=metadata)
+            initial_state = ParticleState(
+                samples,
+                evaluation=posterior.prepare_evaluation(samples, context),
+            )
+            result = sampler.run(
+                initial_state,
+                metadata=metadata,
+                rng=random.rng,
+            )
+        else:
+            self._restore_target_identity(posterior, checkpoint)
+            if self._checkpoint_is_complete(checkpoint):
+                logger.info("Checkpoint contains a completed sampling run.")
+                result = checkpoint.result()
+            else:
+                runtime = sampler.resume_from(checkpoint, rng=random.rng)
+                result = sampler.run(runtime=runtime)
 
         result_file = self.get_result_file_name(self.outdir, self.label)
         result.save_to_file(result_file)
@@ -121,6 +227,11 @@ class SequinceSMC(Sampler):
         return Path(outdir) / f"{label}_{sampler_name}_result.h5"
 
     @classmethod
+    def get_checkpoint_file_name(cls, outdir, label):
+        sampler_name = cls.sampler_name.replace("-", "_")
+        return Path(outdir) / f"{label}_{sampler_name}_checkpoint.h5"
+
+    @classmethod
     def get_expected_outputs(cls, outdir=None, label=None):
         """Get lists of the expected outputs directories and files.
 
@@ -141,7 +252,10 @@ class SequinceSMC(Sampler):
         list
             List of directory names.
         """
-        filenames = [cls.get_result_file_name(outdir, label)]
+        filenames = [
+            cls.get_result_file_name(outdir, label),
+            cls.get_checkpoint_file_name(outdir, label),
+        ]
         dirs = []
         return filenames, dirs
 
