@@ -30,22 +30,35 @@ def bilby_priors():
     priors = bilby.core.prior.PriorDict(conversion_function=conversion_func)
     priors["m"] = bilby.core.prior.Uniform(0, 5, boundary="periodic")
     priors["c"] = bilby.core.prior.Uniform(-2, 2, boundary="reflective")
-    # priors["d"] = bilby.core.prior.Constraint(name="d", minimum=0, maximum=5)
+    priors["d"] = bilby.core.prior.Constraint(name="d", minimum=0, maximum=5)
     return priors
 
 
 @pytest.fixture()
 def sampler_kwargs():
-    return dict()
+    return dict(
+        n_particles=10,
+        mutation_n_steps=5,
+    )
 
 
-def test_run_sampler(
+@pytest.fixture()
+def ps_sampler_kwargs():
+    return dict(
+        n_particles=10,
+        target_ess=20,
+        mutation_n_steps=5,
+    )
+
+
+def test_run_smc_sampler(
     bilby_likelihood,
     bilby_priors,
     tmp_path,
     sampler_kwargs,
 ):
     outdir = tmp_path / "test_run_sampler"
+    outdir.mkdir(parents=True, exist_ok=True)
 
     bilby.run_sampler(
         likelihood=bilby_likelihood,
@@ -65,7 +78,7 @@ def test_run_sampler_pool(
     from multiprocessing.dummy import Pool
 
     outdir = tmp_path / "test_run_sampler_pool"
-
+    outdir.mkdir(parents=True, exist_ok=True)
     with patch("multiprocessing.Pool", new=Pool):
         bilby.run_sampler(
             likelihood=bilby_likelihood,
@@ -75,3 +88,21 @@ def test_run_sampler_pool(
             npool=2,
             **sampler_kwargs,
         )
+
+
+def test_run_persistent_sampler(
+    bilby_likelihood,
+    bilby_priors,
+    tmp_path,
+    ps_sampler_kwargs,
+):
+    outdir = tmp_path / "test_run_ps_sampler"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    bilby.run_sampler(
+        likelihood=bilby_likelihood,
+        priors=bilby_priors,
+        sampler="sequince-ps",
+        outdir=outdir,
+        **ps_sampler_kwargs,
+    )
