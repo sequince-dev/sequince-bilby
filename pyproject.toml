@@ -15,8 +15,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "bilby>=2.7.0",
+    "bilby>=3.0.0",
     "numpy",
+    "orng>=0.2.0a2",
     "pandas",
     "sequince",
 ]
