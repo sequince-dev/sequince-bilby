@@ -10,15 +10,20 @@ The plugin provides two bilby samplers:
 
 ## Installation
 
-Bilby 3.0 has not yet been released and must currently be installed from
-source. Then install `sequince-bilby` from GitHub:
+Install a released Bilby 2.8 version or the development branch intended for
+Bilby 3.0, then install the plugin:
 
 ```bash
-pip install git+https://github.com/bilby-dev/bilby.git
+pip install "bilby>=2.8,<2.9"
 pip install git+https://github.com/sequince-dev/sequince-bilby.git
 ```
 
-Python 3.11 or newer and bilby 3.0 or newer are required.
+For development Bilby, install `git+https://github.com/bilby-dev/bilby.git`.
+Python 3.11 or newer is required. Likelihood calls use Bilby's 2.8 compatibility
+helper or the explicit-parameter development API. Prior sampling uses the
+supplied NumPy generator on both versions; on 2.8 it temporarily substitutes
+Bilby's process-global generator and restores it after the draw. Use process
+pools rather than concurrent threads for the legacy API.
 
 ## Usage
 
