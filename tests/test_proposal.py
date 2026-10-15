@@ -25,7 +25,7 @@ def test_bilby_prior_proposal_uses_supplied_rng():
     )
 
 
-def test_bilby_prior_proposal_forwards_orng_generator():
+def test_bilby_prior_proposal_unwraps_orng_generator():
     class RecordingPriors:
         def __init__(self):
             self.random_state = None
@@ -40,4 +40,4 @@ def test_bilby_prior_proposal_forwards_orng_generator():
 
     proposal.sample(2, rng=sampling_rng)
 
-    assert priors.random_state is sampling_rng
+    assert priors.random_state is sampling_rng.generator
