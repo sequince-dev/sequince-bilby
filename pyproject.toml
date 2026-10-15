@@ -29,6 +29,15 @@ dynamic = ["version"]
 [dependency-groups]
 test = [
     "pytest>=7.0",
+    "h5py>=3",
+]
+lint = [
+    "pre-commit",
+    "ruff==0.14.*",
+]
+dev = [
+    {include-group = "test"},
+    {include-group = "lint"},
 ]
 
 [project.entry-points."bilby.samplers"]
@@ -44,3 +53,40 @@ target-version = "py311"
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 extend-select = ["I"]
+
+# Pixi reuses project dependencies and dependency groups above.
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+requires-pixi = ">=0.78"
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.pypi-dependencies]
+sequince-bilby = { path = ".", editable = true }
+# Sequince is not yet available from the package registry.
+sequince = { git = "https://github.com/sequince-dev/sequince.git" }
+
+[tool.pixi.environments]
+default = { features = ["py313", "test", "lint"], solve-group = "py313" }
+py311 = ["py311", "test"]
+py312 = ["py312", "test"]
+py313 = { features = ["py313", "test"], solve-group = "py313" }
+bilby28 = ["py313", "test", "bilby28"]
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.py313.dependencies]
+python = "3.13.*"
+
+[tool.pixi.feature.test.tasks]
+test = "python -m pytest"
+
+[tool.pixi.feature.lint.tasks]
+lint = "ruff check ."
+format-check = "ruff format --check ."
+
+[tool.pixi.feature.bilby28.pypi-dependencies]
+bilby = ">=2.8,<3.0"
