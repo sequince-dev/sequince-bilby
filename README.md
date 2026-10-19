@@ -1,7 +1,7 @@
 # sequince-bilby
 
 Interface and plugin for using [sequince](https://github.com/sequince-dev/sequince)
-with [bilby](https://git.ligo.org/lscsoft/bilby).
+with [bilby](https://github.com/bilby-dev/bilby).
 
 The plugin provides two bilby samplers:
 
@@ -10,22 +10,20 @@ The plugin provides two bilby samplers:
 
 ## Installation
 
-Install a released Bilby 2.8 version or the development branch intended for
-Bilby 3.0, then install the plugin:
+Install `sequince-bilby` with pip (Python 3.11 or newer is required):
 
 ```bash
-pip install "bilby>=2.8,<2.9"
-pip install git+https://github.com/sequince-dev/sequince-bilby.git
+pip install sequince-bilby
 ```
 
-For development Bilby, install `git+https://github.com/bilby-dev/bilby.git`.
-Python 3.11 or newer is required. Likelihood calls use Bilby's 2.8 compatibility
-helper or the explicit-parameter development API. Prior sampling uses the
-supplied NumPy generator on both versions; on 2.8 it temporarily substitutes
-Bilby's process-global generator and restores it after the draw. Use process
-pools rather than concurrent threads for the legacy API.
+This also installs Sequince, Bilby (2.8 or newer), and the other required
+dependencies. For development setup, see the
+[contributing guidelines](CONTRIBUTING.md#development-setup).
 
 ## Usage
+
+See the [Bilby documentation](https://bilby-dev.github.io/bilby/) for guidance on
+defining likelihoods and priors, running analyses, and working with results.
 
 Once installed, select either sampler with `bilby.run_sampler`:
 
@@ -88,9 +86,19 @@ file in `outdir`.
 
 ## Citing
 
-If you use `sequince-bilby`, please cite sequince and bilby.
+If you use `sequince-bilby` in scientific work, please cite Sequince and Bilby.
+Follow [Bilby's citation guidance](https://bilby-dev.github.io/bilby/citing-bilby.html)
+for the Bilby paper, the DOI for the version used, and any additional references
+relevant to your analysis.
 
 If you use `sequince-ps`, please also cite the
 [persistent sampling paper](https://arxiv.org/abs/2407.20722). For
 gravitational-wave analyses, please also cite
 [arXiv:2506.18977](https://arxiv.org/abs/2506.18977).
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome via the
+[GitHub repository](https://github.com/sequince-dev/sequince-bilby).
+Please see the [contributing guidelines](CONTRIBUTING.md) and
+[Sequince's AI policy](https://github.com/sequince-dev/sequince/blob/main/AI_POLICY.md).
