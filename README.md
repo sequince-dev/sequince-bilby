@@ -102,3 +102,22 @@ Bug reports, feature requests, and pull requests are welcome via the
 [GitHub repository](https://github.com/sequince-dev/sequince-bilby).
 Please see the [contributing guidelines](CONTRIBUTING.md) and
 [Sequince's AI policy](https://github.com/sequince-dev/sequince/blob/main/AI_POLICY.md).
+
+## Related repositories
+
+The following repositories are part of the `sequince` ecosystem:
+
+- [`sequince`](https://github.com/sequince-dev/sequince): provides modular
+  sequential Monte Carlo samplers and reusable sampling components
+- [`sequince-density`](https://github.com/sequince-dev/sequince-density): provides
+  density estimators for preconditioned SMC and ASPIRE-style analyses
+- [`sequince-examples`](https://github.com/sequince-dev/sequince-examples): provides
+  examples demonstrating Sequince's features
+- [`orng`](https://github.com/sequince-dev/orng): provides cross-backend random
+  number generation
+- [`acai`](https://github.com/sequince-dev/acai): provides array-API compatible
+  control flow and iteration
+
+## License
+
+Licensed under the [MIT License](LICENSE).
