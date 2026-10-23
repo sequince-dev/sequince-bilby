@@ -47,8 +47,25 @@ def main() -> None:
         default="sequince-smc",
     )
     parser.add_argument("--n-particles", type=int, default=256)
+    parser.add_argument(
+        "--map-fn",
+        choices=["auto", "map", "vmap"],
+        help="Likelihood mapping (default: vmap for JAX, auto for NumPy).",
+    )
+    parser.add_argument(
+        "--jit", action="store_true", help="Compile the JAX vmap callback."
+    )
     parser.add_argument("--outdir", type=Path)
     args = parser.parse_args()
+    map_fn = args.map_fn
+    if map_fn is None:
+        map_fn = "vmap" if args.backend == "jax" else None
+    elif map_fn == "auto":
+        map_fn = None
+    print(
+        f"Backend: {args.backend}; mapping: {map_fn or 'auto'}; jit: {args.jit}",
+        flush=True,
+    )
 
     # The optional Pixi environment enables the array API and JAX float64
     # before these libraries are imported. ORNG resolves the backend by name.
@@ -69,7 +86,9 @@ def main() -> None:
         label=f"gaussian_{args.backend}",
         n_particles=args.n_particles,
         mutation="differential-evolution",
-        mutation_n_steps=2,
+        mutation_n_steps=10,
+        map_fn=map_fn,
+        jit=args.jit,
         sampler_backend=args.backend,
         sampling_seed=5678,
         npool=1,
