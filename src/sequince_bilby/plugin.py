@@ -61,6 +61,7 @@ class SequinceSMC(Sampler):
             sampler_backend="numpy",
             rng=None,
             map_fn=None,
+            jit=False,
         )
 
     @staticmethod
@@ -210,6 +211,7 @@ class SequinceSMC(Sampler):
             map_fn=self.kwargs.get("map_fn"),
             backend=sampling_rng.backend,
             pool=self.pool,
+            jit=kwargs.pop("jit"),
         )
 
         # Should handle these properly

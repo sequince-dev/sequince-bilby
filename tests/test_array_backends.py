@@ -563,15 +563,110 @@ def test_batched_mapping_parameter_order_and_dtype(
     assert determine_backend_name(actual) == backend
 
 
+@pytest.mark.parametrize("compile_in_factory", [False, True])
+def test_jitted_likelihood_support_and_reuse(
+    mapping_context: None,
+    monkeypatch: pytest.MonkeyPatch,
+    compile_in_factory: bool,
+) -> None:
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    traces = []
+    evaluated = []
+
+    def record(value) -> None:
+        value = float(value)
+        assert np.isfinite(value) and abs(value) <= 1
+        evaluated.append(value)
+
+    class RecordingLikelihood(GaussianLikelihood):
+        def log_likelihood(self, parameters: dict | None = None):
+            traces.append(None)
+            jax.debug.callback(record, parameters["x"])
+            return super().log_likelihood(parameters)
+
+    monkeypatch.setattr(
+        sampling_convenience_dump, "likelihood", RecordingLikelihood()
+    )
+    with jax.enable_x64():
+        functions = get_sequince_functions(
+            map_fn="vmap", backend="jax", jit=compile_in_factory
+        )
+        likelihood = functions.log_likelihood
+        if not compile_in_factory:
+            likelihood = jax.jit(likelihood)
+        batches = [
+            [2.0, 0.0, np.nan, -0.5],
+            [-0.2, 0.1, 0.2, 0.3],
+            [2.0, -2.0, np.nan, np.inf],
+            [0.5, 2.0, 2.0, 2.0],
+        ]
+        trace_count = None
+        for batch in batches:
+            before = len(evaluated)
+            actual = likelihood(
+                jnp.asarray(batch)[:, None]
+            ).block_until_ready()
+            expected = [
+                -0.5 * (x - 0.2) ** 2 - 2 if abs(x) <= 1 else -np.inf
+                for x in batch
+            ]
+            np.testing.assert_allclose(actual, expected)
+            if trace_count is None:
+                trace_count = len(traces)
+                assert trace_count > 0
+            else:
+                assert len(traces) == trace_count
+            if not any(abs(x) <= 1 for x in batch):
+                assert len(evaluated) == before
+        assert likelihood(jnp.empty((0, 1))).shape == (0,)
+
+
+def test_jitted_factories_bind_separate_contexts(
+    mapping_context: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    with jax.enable_x64():
+        first = get_sequince_functions(map_fn="vmap", backend="jax", jit=True)
+        monkeypatch.setattr(
+            sampling_convenience_dump, "parameters", {"offset": 0.8}
+        )
+        second = get_sequince_functions(map_fn="vmap", backend="jax", jit=True)
+        # First trace occurs after globals have changed. Each callback must use
+        # its own bound context, including when tracing a new batch shape.
+        for values in ([0.0, 0.5], [-0.5]):
+            x = jnp.asarray(values)[:, None]
+            np.testing.assert_allclose(
+                first.log_likelihood(x),
+                -0.5 * (np.array(values) - 0.2) ** 2 - 2,
+            )
+            np.testing.assert_allclose(
+                second.log_likelihood(x),
+                -0.5 * (np.array(values) - 0.8) ** 2 - 2,
+            )
+
+
+@pytest.mark.parametrize(
+    "backend,mapping", [("numpy", "map"), ("torch", "vmap"), ("jax", "map")]
+)
+def test_reject_unsupported_jit(backend: str, mapping: str) -> None:
+    with pytest.raises(ValueError, match="jit=True requires"):
+        get_sequince_functions(map_fn=mapping, backend=backend, jit=True)
+
+
 @pytest.mark.parametrize(
     "sampler_class", [SequinceSMC, SequincePersistentSampling]
 )
+@pytest.mark.parametrize("jit", [False, True])
 def test_vectorized_sampler(
-    xp: ModuleType, sampler_class: type[SequinceSMC], tmp_path: Path
+    xp: ModuleType, sampler_class: type[SequinceSMC], tmp_path: Path, jit: bool
 ) -> None:
     backend = determine_backend_name(xp=xp)
     if backend == "numpy" or not getattr(random, "BILBY_ARRAY_API", False):
         pytest.skip("Requires JAX or Torch and array-aware Bilby")
+    if jit and backend != "jax":
+        pytest.skip("JIT compilation is supported only for JAX")
     options = dict(
         likelihood=GaussianLikelihood(),
         priors=bilby.core.prior.PriorDict(
@@ -588,7 +683,7 @@ def test_vectorized_sampler(
     )
     expected = sampler_class(**options, label="serial").run_sampler()
     actual = sampler_class(
-        **options, label="vectorized", map_fn="vmap"
+        **options, label="vectorized", map_fn="vmap", jit=jit
     ).run_sampler()
     np.testing.assert_allclose(
         actual.nested_samples.to_numpy(), expected.nested_samples.to_numpy()

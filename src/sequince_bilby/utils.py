@@ -91,12 +91,61 @@ def _global_log_likelihood(x: Any) -> float | Any:
     )
 
 
+def _get_jax_log_likelihood(
+    log_prior: Callable[[Any], Any], likelihood_dtype: str, *, jit: bool
+) -> Callable[[Any], Any]:
+    """Bind this sampling context and build a fixed-shape JAX callback."""
+    import jax
+    import jax.numpy as jnp
+
+    likelihood = sampling_convenience_dump.likelihood
+    parameters = copy.deepcopy(sampling_convenience_dump.parameters)
+    keys = tuple(sampling_convenience_dump.search_parameter_keys)
+    use_ratio = sampling_convenience_dump.use_ratio
+    dtype = jnp.dtype(likelihood_dtype)
+
+    def scalar_log_likelihood(x: Any) -> Any:
+        params = dict(parameters)
+        params.update(zip(keys, x))
+        return jnp.asarray(
+            _call_likelihood(likelihood, params, use_ratio=use_ratio),
+            dtype=dtype,
+        )
+
+    # Construct the transformation once per factory, never inside a callback.
+    batched_log_likelihood = jax.vmap(scalar_log_likelihood)
+
+    def evaluate(args: tuple[Any, Any]) -> Any:
+        x, valid = args
+        # Only valid parameter values reach the likelihood. Padding with an
+        # existing valid row avoids dynamic compaction and its changing shapes.
+        first_valid = jnp.argmax(valid)
+        safe_x = jnp.where(valid[:, None], x, x[first_valid])
+        values = batched_log_likelihood(safe_x)
+        if values.shape != (x.shape[0],):
+            raise ValueError("map_fn must return one scalar per particle.")
+        return jnp.where(valid, values, -jnp.inf)
+
+    def invalid(args: tuple[Any, Any]) -> Any:
+        return jnp.full((args[0].shape[0],), -jnp.inf, dtype=dtype)
+
+    def log_likelihood(particles: Any) -> Any:
+        x = jnp.asarray(particles, dtype=dtype)
+        if particles.shape[0] == 0:
+            return jnp.empty((0,), dtype=dtype)
+        valid = jnp.isfinite(log_prior(particles))
+        return jax.lax.cond(jnp.any(valid), evaluate, invalid, (x, valid))
+
+    return jax.jit(log_likelihood) if jit else log_likelihood
+
+
 def get_sequince_functions(
     likelihood_dtype: str = "float64",
     map_fn: MapFunction | Literal["map", "vmap"] | None = None,
     *,
     backend: str = "numpy",
     pool: Any | None = None,
+    jit: bool = False,
 ) -> Functions:
     """Build array-preserving callbacks from an initialized Bilby context.
 
@@ -108,11 +157,16 @@ def get_sequince_functions(
         Ordered map accepting ``(scalar_function, particles)``. The particles
         are a two-dimensional array containing only rows with finite prior
         density. Return exactly one scalar per row, in the same order. ``None``
-        uses the supplied pool's map or Python's map.
+        uses the supplied pool's map or Python's map. JAX's built-in ``"vmap"``
+        uses a fixed batch shape, padding invalid rows with a valid row.
     backend : str
         Sampling backend used to resolve named maps.
     pool : object or None
         Initialized Bilby worker pool, used when ``map_fn`` is None.
+    jit : bool
+        Compile the JAX ``"vmap"`` likelihood callback once per factory. Both
+        priors and likelihood must be traceable and remain unchanged throughout
+        the callback's lifetime. Other mapping configurations reject this option.
 
     Returns
     -------
@@ -121,7 +175,15 @@ def get_sequince_functions(
         ``(n_particles, n_parameters)`` and returning arrays of shape
         ``(n_particles,)`` on the input backend and device. The likelihood
         callback evaluates only particles with finite prior density.
+        JAX's built-in ``"vmap"`` callback also supports external ``jax.jit``.
     """
+    if not isinstance(jit, bool):
+        raise TypeError("jit must be a boolean.")
+    jax_vmap = (
+        backend == "jax" and isinstance(map_fn, str) and map_fn == "vmap"
+    )
+    if jit and not jax_vmap:
+        raise ValueError("jit=True requires backend='jax' and map_fn='vmap'.")
     resolved_map = resolve_map_fn(map_fn, backend=backend)
     if map_fn is None and pool is not None:
         resolved_map = pool.map
@@ -133,6 +195,14 @@ def get_sequince_functions(
         return asarray(
             priors.ln_prob(x, axis=0),
             like=particles,
+        )
+
+    if jax_vmap:
+        return Functions(
+            log_likelihood=_get_jax_log_likelihood(
+                log_prior, likelihood_dtype, jit=jit
+            ),
+            log_prior=log_prior,
         )
 
     def log_likelihood(particles: Any) -> Any:
