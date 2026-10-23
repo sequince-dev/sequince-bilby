@@ -417,3 +417,180 @@ def test_numpy_rng_seeds_backend(xp: ModuleType) -> None:
         backend, np.random.default_rng(1234)
     ).uniform(size=10)
     np.testing.assert_array_equal(to_numpy(first), to_numpy(repeated))
+
+
+@pytest.fixture()
+def mapping_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sampling_convenience_dump, "priors", ArrayPriors())
+    monkeypatch.setattr(
+        sampling_convenience_dump, "parameters", {"offset": 0.2}
+    )
+    monkeypatch.setattr(
+        sampling_convenience_dump, "search_parameter_keys", ["x"]
+    )
+    monkeypatch.setattr(sampling_convenience_dump, "use_ratio", True)
+    monkeypatch.setattr(
+        sampling_convenience_dump, "likelihood", GaussianLikelihood()
+    )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [[0.0, -0.5], [2.0, 0.0, -2.0, -0.5, 2.0], [2.0, -2.0], []],
+)
+@pytest.mark.parametrize("mapping", ["custom", "array", "vmap"])
+def test_likelihood_mapping(
+    xp: ModuleType, mapping_context: None, values: list[float], mapping: str
+) -> None:
+    backend = determine_backend_name(xp=xp)
+    if mapping == "vmap" and backend == "numpy":
+        pytest.skip("NumPy does not provide vmap")
+    calls = []
+
+    def custom_map(function, batch):
+        assert determine_backend_name(batch) == backend
+        calls.append(batch.shape)
+        if mapping == "array":
+            return xp.stack([function(row) for row in batch])
+        return map(function, batch)
+
+    mapper = "vmap" if mapping == "vmap" else custom_map
+    particles = xp.reshape(xp.asarray(values, dtype=xp.float64), (-1, 1))
+    actual = get_sequince_functions(
+        map_fn=mapper, backend=backend
+    ).log_likelihood(particles)
+    expected = [
+        -0.5 * (value - 0.2) ** 2 - 2 if abs(value) <= 1 else -np.inf
+        for value in values
+    ]
+    np.testing.assert_allclose(to_numpy(actual), expected)
+    assert determine_backend_name(actual) == backend
+    if mapping != "vmap":
+        valid = sum(abs(value) <= 1 for value in values)
+        assert calls == ([(valid, 1)] if valid else [])
+
+
+@pytest.mark.parametrize(
+    "output", [[], [0.0], [0.0, 0.0, 0.0], [[0.0], [0.0]]]
+)
+def test_map_must_return_one_scalar_per_particle(
+    mapping_context: None, output: list
+) -> None:
+    def bad_map(function, batch):
+        return output
+
+    functions = get_sequince_functions(map_fn=bad_map)
+    with pytest.raises(ValueError, match="one scalar per particle"):
+        functions.log_likelihood(np.array([[0.0], [0.5]]))
+
+
+def test_map_errors_propagate(mapping_context: None) -> None:
+    def failed_map(function, batch):
+        raise RuntimeError("mapping failed")
+
+    with pytest.raises(RuntimeError, match="mapping failed"):
+        get_sequince_functions(map_fn=failed_map).log_likelihood(
+            np.array([[0.0]])
+        )
+
+
+@pytest.mark.parametrize("invalid", ["unknown", 42, False])
+def test_invalid_map_option(invalid) -> None:
+    from sequince_bilby.utils import resolve_map_fn
+
+    with pytest.raises(ValueError, match="map_fn must be"):
+        resolve_map_fn(invalid, backend="numpy")
+
+
+def test_numpy_rejects_vmap() -> None:
+    from sequince_bilby.utils import resolve_map_fn
+
+    with pytest.raises(ValueError, match="requires the jax or torch"):
+        resolve_map_fn("vmap", backend="numpy")
+
+
+@pytest.mark.parametrize("shape", [(), (2, 1), (1,), (3,)])
+def test_array_map_requires_scalar_per_particle(
+    xp: ModuleType, mapping_context: None, shape: tuple[int, ...]
+) -> None:
+    def bad_map(function, batch):
+        return xp.zeros(shape, dtype=xp.float64)
+
+    functions = get_sequince_functions(map_fn=bad_map)
+    with pytest.raises(ValueError, match="one scalar per particle"):
+        functions.log_likelihood(xp.asarray([[0.0], [0.5]]))
+
+
+@pytest.mark.parametrize("mapping", ["custom", "vmap"])
+def test_batched_mapping_parameter_order_and_dtype(
+    xp: ModuleType,
+    mapping_context: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mapping: str,
+) -> None:
+    backend = determine_backend_name(xp=xp)
+    if mapping == "vmap" and backend == "numpy":
+        pytest.skip("NumPy does not provide vmap")
+
+    class OrderedLikelihood(GaussianLikelihood):
+        def log_likelihood(self, parameters: dict | None = None):
+            residual = (
+                parameters["z"] + 3 * parameters["x"] - parameters["offset"]
+            )
+            return -0.5 * residual**2
+
+    monkeypatch.setattr(
+        sampling_convenience_dump, "search_parameter_keys", ["z", "x"]
+    )
+    monkeypatch.setattr(
+        sampling_convenience_dump, "likelihood", OrderedLikelihood()
+    )
+
+    def array_map(function, batch):
+        return xp.stack([function(row) for row in batch])
+
+    mapper = "vmap" if mapping == "vmap" else array_map
+    particles = xp.asarray(
+        [[0.2, 0.3], [0.4, 2.0], [0.6, -0.5]], dtype=xp.float64
+    )
+    actual = get_sequince_functions(
+        map_fn=mapper, backend=backend, likelihood_dtype="float32"
+    ).log_likelihood(particles)
+    np.testing.assert_allclose(
+        to_numpy(actual), [-2.405, -np.inf, -2.605], rtol=1e-6
+    )
+    assert actual.dtype == xp.float32
+    assert determine_backend_name(actual) == backend
+
+
+@pytest.mark.parametrize(
+    "sampler_class", [SequinceSMC, SequincePersistentSampling]
+)
+def test_vectorized_sampler(
+    xp: ModuleType, sampler_class: type[SequinceSMC], tmp_path: Path
+) -> None:
+    backend = determine_backend_name(xp=xp)
+    if backend == "numpy" or not getattr(random, "BILBY_ARRAY_API", False):
+        pytest.skip("Requires JAX or Torch and array-aware Bilby")
+    options = dict(
+        likelihood=GaussianLikelihood(),
+        priors=bilby.core.prior.PriorDict(
+            {"x": bilby.core.prior.Uniform(-5, 5), "offset": 0.3}
+        ),
+        outdir=tmp_path,
+        sampler_backend=backend,
+        rng=1234,
+        n_particles=64,
+        mutation="none",
+        checkpoint=False,
+        resume=False,
+        logging_frequency=0,
+    )
+    expected = sampler_class(**options, label="serial").run_sampler()
+    actual = sampler_class(
+        **options, label="vectorized", map_fn="vmap"
+    ).run_sampler()
+    np.testing.assert_allclose(
+        actual.nested_samples.to_numpy(), expected.nested_samples.to_numpy()
+    )
+    assert actual.log_evidence == pytest.approx(expected.log_evidence)

@@ -7,6 +7,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
+from bilby.core.result import Result
 from bilby.core.sampler.base_sampler import Sampler
 from bilby.core.utils import random
 from bilby.core.utils.log import logger
@@ -59,6 +60,7 @@ class SequinceSMC(Sampler):
             proposal=None,
             sampler_backend="numpy",
             rng=None,
+            map_fn=None,
         )
 
     @staticmethod
@@ -159,15 +161,26 @@ class SequinceSMC(Sampler):
             and float(temperature) >= float(max_temperature)
         )
 
-    def run_sampler(self) -> dict:
-        """Run the sampler."""
+    def run_sampler(self) -> Result:
+        """Run the sampler and release owned workers, including on failure."""
+        user_pool = hasattr(
+            self.kwargs.get("pool", getattr(self, "pool", None)), "map"
+        )
+        try:
+            return self._run_sampler()
+        finally:
+            if not user_pool:
+                self._close_pool()
+
+    def _run_sampler(self) -> Result:
+        """Configure likelihood mapping and run or resume Sequince."""
 
         proposal = self.kwargs.get("proposal")
         kwargs = copy.deepcopy(
             {
                 key: value
                 for key, value in self.kwargs.items()
-                if key not in ("proposal", "rng")
+                if key not in ("proposal", "rng", "map_fn", "pool")
             }
         )
         sampling_rng = self._resolve_sampling_rng(
@@ -193,12 +206,11 @@ class SequinceSMC(Sampler):
 
         self._setup_pool()
 
-        if self.pool is not None:
-            map_fn = self.pool.map
-        else:
-            map_fn = map
-
-        funcs = get_sequince_functions(map_fn=map_fn)
+        funcs = get_sequince_functions(
+            map_fn=self.kwargs.get("map_fn"),
+            backend=sampling_rng.backend,
+            pool=self.pool,
+        )
 
         # Should handle these properly
         kwargs.pop("npool", None)
@@ -277,8 +289,6 @@ class SequinceSMC(Sampler):
 
         result_file = self.get_result_file_name(self.outdir, self.label)
         result.save_to_file(result_file)
-
-        self._close_pool()
 
         weighted_samples, weights = result.posterior_samples(method="weights")
         weighted_posterior = pd.DataFrame(
