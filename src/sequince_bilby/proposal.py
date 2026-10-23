@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 from bilby.core.utils import random
 from orng import RandomGenerator
+from sequince.array_api import asarray, namespace
 
 
 class BilbyPriorProposal:
@@ -27,15 +28,22 @@ class BilbyPriorProposal:
         *,
         rng=None,
         xp: Any | None = None,
-    ) -> np.ndarray:
+    ) -> Any:
         """Draw particles using the random generator supplied by Sequince."""
-        del context, xp
+        del context
         if isinstance(rng, RandomGenerator):
             if rng.backend != "numpy":
-                raise ValueError("Bilby prior sampling requires a NumPy RNG.")
-            # Preserve the same generator and its state; do not reseed or draw
-            # an intermediate seed when adapting Sequince's RNG wrapper.
-            rng = rng.generator
+                if not self._accepts_random_state or not getattr(
+                    random, "BILBY_ARRAY_API", False
+                ):
+                    raise ValueError(
+                        "Backend prior sampling requires array-aware Bilby "
+                        "with BILBY_ARRAY_API=1 before import."
+                    )
+            else:
+                # state() returns the live generator for seeded and restored
+                # wrappers too; .generator only records the constructor input.
+                rng = rng.state()
         if self._accepts_random_state:
             samples = self.priors.sample(n_samples, random_state=rng)
         else:
@@ -53,17 +61,15 @@ class BilbyPriorProposal:
                 samples = self.priors.sample(n_samples)
             finally:
                 random.Generator.rng = original_rng
-        return np.column_stack(
-            [samples[key] for key in self.search_parameter_keys]
-        )
+        columns = [samples[key] for key in self.search_parameter_keys]
+        xp = xp or namespace(*columns)
+        return xp.stack([asarray(column, xp=xp) for column in columns], axis=1)
 
-    def log_prob(self, particles, context=None) -> np.ndarray:
+    def log_prob(self, particles: Any, context=None) -> Any:
         """Evaluate the joint Bilby prior density for each particle."""
         del context
-        samples = dict(
-            zip(self.search_parameter_keys, np.asarray(particles).T)
-        )
-        return np.asarray(self.priors.ln_prob(samples, axis=0))
+        samples = dict(zip(self.search_parameter_keys, particles.T))
+        return asarray(self.priors.ln_prob(samples, axis=0), like=particles)
 
     def sample_and_log_prob(
         self,
@@ -72,7 +78,7 @@ class BilbyPriorProposal:
         *,
         rng=None,
         xp: Any | None = None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[Any, Any]:
         """Draw particles and return their joint prior densities."""
         particles = self.sample(
             n_samples,

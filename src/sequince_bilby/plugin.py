@@ -10,6 +10,8 @@ import pandas as pd
 from bilby.core.sampler.base_sampler import Sampler
 from bilby.core.utils import random
 from bilby.core.utils.log import logger
+from orng import RandomGenerator
+from sequince.array_api import determine_backend_name, to_numpy
 from sequince.checkpoint import HDF5CheckpointWriter, SMCCheckpoint
 from sequince.log import configure_logging
 from sequince.prebuilt_samplers import (
@@ -55,7 +57,29 @@ class SequinceSMC(Sampler):
             checkpoint_frequency=1,
             resume=True,
             proposal=None,
+            sampler_backend="numpy",
+            rng=None,
         )
+
+    @staticmethod
+    def _resolve_sampling_rng(
+        backend: str,
+        rng: RandomGenerator | np.random.Generator | int | None = None,
+    ) -> RandomGenerator:
+        """Adapt a supplied RNG or seed, defaulting to Bilby's stream."""
+        if backend not in ("numpy", "jax", "torch"):
+            raise ValueError("sampler_backend must be numpy, jax, or torch.")
+        if isinstance(rng, Integral) and not isinstance(rng, bool):
+            return resolve_rng(int(rng), backend=backend)
+        resolved = resolve_rng(random.rng if rng is None else rng)
+        if resolved.backend == backend:
+            return resolved
+        if resolved.backend != "numpy":
+            raise ValueError("rng backend differs from sampler_backend.")
+        # A backend-native stream cannot wrap NumPy's generator. Derive one
+        # seed from Bilby's stream so its usual seed() interface controls both.
+        seed = int(resolved.state().integers(0, 2**32))
+        return resolve_rng(seed, backend=backend)
 
     def _configure_checkpointing(self, kwargs: dict) -> Path:
         """Consume checkpoint options and add the configured writer."""
@@ -143,9 +167,22 @@ class SequinceSMC(Sampler):
             {
                 key: value
                 for key, value in self.kwargs.items()
-                if key != "proposal"
+                if key not in ("proposal", "rng")
             }
         )
+        sampling_rng = self._resolve_sampling_rng(
+            kwargs.pop("sampler_backend"), self.kwargs.get("rng")
+        )
+        if sampling_rng.backend != "numpy":
+            if not getattr(random, "BILBY_ARRAY_API", False):
+                raise ValueError(
+                    "Backend sampling requires array-aware Bilby with "
+                    "BILBY_ARRAY_API=1 before import."
+                )
+            if self.pool is not None or self.npool not in (None, 1):
+                raise ValueError(
+                    "Backend sampling currently requires npool=1."
+                )
 
         resume = kwargs.pop("resume")
         if not isinstance(resume, bool):
@@ -162,12 +199,10 @@ class SequinceSMC(Sampler):
             map_fn = map
 
         funcs = get_sequince_functions(map_fn=map_fn)
-        sampling_rng = resolve_rng(random.rng)
 
         # Should handle these properly
         kwargs.pop("npool", None)
         kwargs.pop("pool", None)
-        kwargs.pop("sampling_seed", None)
 
         checkpoint_filename = self._configure_checkpointing(kwargs)
 
@@ -202,12 +237,35 @@ class SequinceSMC(Sampler):
                 context=context,
                 rng=sampling_rng,
             )
+            if (
+                determine_backend_name(initial_state.particles)
+                != sampling_rng.backend
+            ):
+                raise ValueError(
+                    "Proposal particles and sampling RNG must use the "
+                    "same backend."
+                )
             result = sampler.run(
                 initial_state,
                 metadata=metadata,
                 rng=sampling_rng,
             )
         else:
+            if (
+                determine_backend_name(checkpoint.state.particles)
+                != sampling_rng.backend
+            ):
+                raise ValueError(
+                    "Checkpoint backend differs from the sampling backend."
+                )
+            restored_rng = checkpoint.restore_rng()
+            if restored_rng is not None:
+                if restored_rng.backend != sampling_rng.backend:
+                    raise ValueError(
+                        "Checkpoint RNG backend differs from the "
+                        "sampling backend."
+                    )
+                sampling_rng = restored_rng
             self._restore_target_identity(posterior, checkpoint)
             if self._checkpoint_is_complete(checkpoint):
                 logger.info("Checkpoint contains a completed sampling run.")
@@ -215,6 +273,7 @@ class SequinceSMC(Sampler):
             else:
                 runtime = sampler.resume_from(checkpoint, rng=sampling_rng)
                 result = sampler.run(runtime=runtime)
+                sampling_rng = runtime.rng
 
         result_file = self.get_result_file_name(self.outdir, self.label)
         result.save_to_file(result_file)
@@ -223,19 +282,21 @@ class SequinceSMC(Sampler):
 
         weighted_samples, weights = result.posterior_samples(method="weights")
         weighted_posterior = pd.DataFrame(
-            np.asarray(weighted_samples),
+            to_numpy(weighted_samples),
             columns=self.search_parameter_keys,
         )
-        weighted_posterior["weights"] = np.asarray(weights)
+        weighted_posterior["weights"] = to_numpy(weights)
         self.result.nested_samples = weighted_posterior
 
         posterior_samples, _ = result.posterior_samples(
             method="rejection",
             rng=sampling_rng,
         )
-        self.result.samples = posterior_samples
-        self.result.log_evidence = result.log_evidence()
-        self.result.log_evidence_err = result.log_evidence_error()
+        self.result.samples = to_numpy(posterior_samples)
+        self.result.log_evidence = float(to_numpy(result.log_evidence()))
+        self.result.log_evidence_err = float(
+            to_numpy(result.log_evidence_error())
+        )
         self.result.num_likelihood_evaluations = np.nan
 
         return self.result
@@ -296,6 +357,18 @@ class SequinceSMC(Sampler):
 
     def _translate_kwargs(self, kwargs):
         """Translate the keyword arguments"""
+        aliases = dict.fromkeys(
+            ("rng", "random_state", *self.sampling_seed_equiv_kwargs)
+        )
+        supplied = {key: kwargs.pop(key) for key in aliases if key in kwargs}
+        values = [value for value in supplied.values() if value is not None]
+        if len(values) > 1:
+            raise ValueError(
+                "Specify only one of rng, random_state, seed, "
+                "sampling_seed, or random_seed."
+            )
+        if supplied:
+            kwargs["rng"] = values[0] if values else None
         if "npool" not in kwargs:
             for equiv in self.npool_equiv_kwargs:
                 if equiv in kwargs:
