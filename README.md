@@ -70,9 +70,9 @@ result = bilby.run_sampler(
 
 The priors, likelihood, and any custom proposal must support the selected
 backend. Likelihood data and waveform models must also be configured for that
-backend where required by Bilby. Native backend sampling currently uses an eager
-Python loop over particles and requires `npool=1` without a pool; it does not
-compile or batch likelihood calls. CuPy is not currently supported by this plugin.
+backend where required by Bilby. Native backend sampling requires `npool=1`
+without a pool. Likelihood mapping can use backend vectorization as described
+below; the sampler loop remains eager. CuPy is not currently supported.
 Bilby 2.8 remains supported for NumPy sampling.
 
 PyTorch support is experimental: the tested development Bilby checkout raises a
@@ -107,9 +107,15 @@ with either backend and sampler:
 
 ```bash
 pixi run -e bilby-main example-backends --backend jax
+pixi run -e bilby-main example-backends --backend jax --map-fn vmap
+pixi run -e bilby-main example-backends --backend jax --map-fn vmap --jit
 pixi run -e bilby-main example-backends --backend numpy --sampler sequince-ps
 pixi run -e bilby-main test
 ```
+
+The example selects `vmap` for its traceable JAX likelihood by default. Pass
+`--map-fn auto` to use the sampler's default mapping or `--map-fn map` to force
+serial evaluation.
 
 The example uses Bilby 3's `log_likelihood(parameters)` interface and compares
 the sampled posterior mean with its analytic value. Each invocation creates a
@@ -121,8 +127,9 @@ remains constrained to released Bilby 2.8.
 
 ### Parallelization
 
-Likelihood evaluations support parallelization through bilby's pool. Set
-`npool` to the number of worker processes:
+By default, likelihood evaluation uses Bilby's pool map when a pool is available,
+otherwise Python's `map`. For NumPy sampling, set `npool` to the number of worker
+processes:
 
 ```python
 result = bilby.run_sampler(
@@ -132,6 +139,84 @@ result = bilby.run_sampler(
     npool=4,
 )
 ```
+
+Override this choice with `map_fn`:
+
+- `None` (default): infer the map from Bilby's pool.
+- `"map"`: use Python's ordered, serial map, even if a pool exists.
+- `"vmap"`: use `jax.vmap` or `torch.vmap` for the selected sampling backend.
+- A callable: use an ordered `map_fn(function, particles)` directly. It receives
+  a backend array of shape `(n_valid, n_parameters)` and must return exactly one
+  scalar per row, in the same order. Custom worker maps must initialize Bilby's
+  worker-local sampling context; unordered maps are unsupported.
+
+For a traceable, side-effect-free JAX likelihood:
+
+```python
+result = bilby.run_sampler(
+    likelihood=likelihood,
+    priors=priors,
+    sampler="sequince-smc",
+    sampler_backend="jax",
+    map_fn="vmap",
+    sampling_seed=1234,
+)
+```
+
+Vectorization is explicit because backend arrays alone do not establish that a
+likelihood can be traced. Mapping errors propagate without a silent fallback.
+Custom maps and Torch's `vmap` receive only particles with finite prior density,
+and no call is made when none are valid. Vectorization does not compile the full
+SMC loop.
+Array-returning maps keep their results batched; iterator-returning maps remain
+supported.
+
+For JAX with `map_fn="vmap"`, the likelihood callback is traceable, including its
+prior-support mask. It keeps the original batch shape by replacing invalid rows
+with a valid row before vectorized evaluation, then restoring `-inf` outputs.
+This can evaluate valid rows more than once, but invalid parameter values never
+reach the likelihood at runtime. An all-invalid batch skips runtime likelihood
+evaluation. Other mapping configurations use eager masking on the host.
+
+Add `jit=True` to compile this JAX callback once per sampler run:
+
+```python
+result = bilby.run_sampler(
+    likelihood=likelihood,
+    priors=priors,
+    sampler="sequince-smc",
+    sampler_backend="jax",
+    map_fn="vmap",
+    jit=True,
+    sampling_seed=1234,
+)
+```
+
+Both the prior evaluation and likelihood must support JAX tracing. The callback
+binds its sampling context when constructed; treat the likelihood, its data, and
+priors as immutable for its lifetime. Changing only which particles are valid
+does not change the batch shape or require recompilation. Different batch shapes
+or input dtypes can still trigger compilation. The factory's JAX `"vmap"`
+callback also supports wrapping with `jax.jit` directly. `jit=True` is rejected
+for other backends or mapping options.
+
+To compare serial mapping and `vmap`, with or without JIT compilation:
+
+```bash
+pixi run -e bilby-main python examples/benchmark_mapping.py
+pixi run -e bilby-main python examples/benchmark_mapping.py --jit
+```
+
+The benchmark uses 64 particles and Gaussian data arrays of 32 and 4,096
+observations. It reports first-call times and medians of three repeated timings
+after an additional warm-up, synchronizes JAX outputs, and checks agreement of
+likelihoods, weighted samples, and evidence. Sampler timings include initialization
+and Sequince result writing, excluding imports. Every sampler timing constructs
+a new sampler, so `--jit` includes compilation for that run. First-call timings
+can reuse JAX caches populated by earlier cases. Use `--scope callback` or
+`--scope sampler` to measure each separately; particle counts, data sizes, and
+repetitions are configurable. Speedups depend on likelihood cost, batch size,
+and device.
 
 ### Checkpointing
 
