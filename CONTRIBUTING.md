@@ -169,12 +169,19 @@ pixi run -e bilby28 test
 ```
 
 The `bilby28` environment constrains Bilby to `>=2.8,<3.0`. The default environment
-uses the project's `bilby>=2.8.0` requirement without an upper bound. Also test
-the development API described in [README.md](README.md) when relevant. Use a
-separate checkout of this plugin and temporarily add a `bilby` Git or local path
-override under `[tool.pixi.pypi-dependencies]`, selecting a Bilby revision that
-satisfies the project's version requirement. Run `pixi install` and
-`pixi run test`, and keep that override out of pull requests.
+uses the project's `bilby>=2.8.0.dev0` requirement without an upper bound. Also test
+the development API described in [README.md](README.md) when relevant:
+
+```bash
+pixi run -e bilby-main test
+pixi run -e bilby-main example-backends --backend jax
+```
+
+The optional `bilby-main` environment installs upstream Bilby `main` and JAX,
+and enables Bilby's array API and JAX double precision before import. Optional
+backend tests skip when their dependencies or Bilby APIs are unavailable.
+PyTorch tests require a separate installation of PyTorch; the environment does
+not install it. Report expected failures from known upstream bugs explicitly.
 
 Report the Python, Bilby, and Sequince versions tested, commands and results, and
 any relevant skips or environments that could not be tested. Skipped checks do

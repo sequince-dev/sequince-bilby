@@ -15,7 +15,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "bilby>=2.8.0",
+    # Upstream main uses the newer API but reports a 2.8 development version.
+    "bilby>=2.8.0.dev0",
     "numpy",
     "orng>=0.2.1",
     "pandas",
@@ -71,6 +72,7 @@ py311 = ["py311", "test"]
 py312 = ["py312", "test"]
 py313 = { features = ["py313", "test"], solve-group = "py313" }
 bilby28 = ["py313", "test", "bilby28"]
+bilby-main = ["py313", "test", "lint", "bilby-main"]
 
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
@@ -90,3 +92,15 @@ format-check = "ruff format --check ."
 
 [tool.pixi.feature.bilby28.pypi-dependencies]
 bilby = ">=2.8,<3.0"
+
+[tool.pixi.feature.bilby-main.pypi-dependencies]
+bilby = { git = "https://github.com/bilby-dev/bilby.git", rev = "main" }
+jax = "*"
+
+[tool.pixi.feature.bilby-main.activation.env]
+BILBY_ARRAY_API = "1"
+SCIPY_ARRAY_API = "1"
+JAX_ENABLE_X64 = "1"
+
+[tool.pixi.feature.bilby-main.tasks]
+example-backends = "python examples/bilby_array_backends.py"
