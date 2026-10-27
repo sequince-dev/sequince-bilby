@@ -63,6 +63,8 @@ platforms = ["linux-64", "osx-arm64"]
 
 [tool.pixi.pypi-dependencies]
 sequince-bilby = { path = ".", editable = true }
+# Opt Sequince's transitive dependency into prerelease resolution in Pixi.
+minipcn = ">=0.3.0a1"
 
 [tool.pixi.environments]
 default = { features = ["py313", "test", "lint"], solve-group = "py313" }
