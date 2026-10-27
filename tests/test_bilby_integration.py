@@ -209,3 +209,75 @@ def test_resume_from_checkpoint(
         resumed_checkpoint.next_iteration > initial_checkpoint.next_iteration
     )
     assert result.samples.shape[1] == 2
+
+
+@pytest.mark.parametrize(
+    "sampler_class", [SequinceSMC, SequincePersistentSampling]
+)
+@pytest.mark.parametrize("mapping", ["auto", "serial", "custom"])
+def test_map_selection(
+    sampler_class, mapping, bilby_likelihood, bilby_priors, tmp_path
+):
+    from multiprocessing.dummy import Pool
+    from unittest.mock import Mock
+
+    class CustomMap:
+        def __init__(self):
+            self.calls = 0
+
+        def __deepcopy__(self, memo):
+            raise AssertionError("The custom mapper must not be copied")
+
+        def __call__(self, function, batch):
+            assert isinstance(batch, np.ndarray)
+            self.calls += 1
+            return map(function, batch)
+
+    mapper = CustomMap()
+    option = {"auto": None, "serial": "map", "custom": mapper}[mapping]
+    with Pool(2) as pool:
+        pool.map = Mock(wraps=pool.map)
+        sampler = sampler_class(
+            likelihood=bilby_likelihood,
+            priors=bilby.core.prior.PriorDict(
+                {"m": bilby_priors["m"], "c": bilby_priors["c"]}
+            ),
+            outdir=tmp_path,
+            pool=pool,
+            map_fn=option,
+            n_particles=32,
+            mutation="none",
+            rng=1234,
+            checkpoint=False,
+            resume=False,
+            logging_frequency=0,
+        )
+        result = sampler.run_sampler()
+        assert pool.map.called == (mapping == "auto")
+    assert (mapper.calls > 0) == (mapping == "custom")
+    np.testing.assert_allclose(result.nested_samples.weights.sum(), 1.0)
+    assert np.isfinite(result.log_evidence)
+
+
+def test_mapping_failure_closes_owned_pool(
+    bilby_likelihood, bilby_priors, tmp_path
+):
+    from multiprocessing.dummy import Pool
+
+    def failed_map(function, batch):
+        raise RuntimeError("mapping failed")
+
+    with patch("multiprocessing.Pool", new=Pool):
+        sampler = SequinceSMC(
+            likelihood=bilby_likelihood,
+            priors=bilby_priors,
+            outdir=tmp_path,
+            npool=2,
+            map_fn=failed_map,
+            n_particles=32,
+            checkpoint=False,
+            resume=False,
+        )
+        with pytest.raises(RuntimeError, match="mapping failed"):
+            sampler.run_sampler()
+        assert sampler.pool is None
