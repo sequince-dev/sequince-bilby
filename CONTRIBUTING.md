@@ -72,10 +72,9 @@ effect without reinstalling. Python 3.11 and 3.12 test environments are also
 available. The `test`, `lint`, and `dev` dependency groups can be used with other
 tools that support dependency groups.
 
-Pixi installs Sequince from its upstream Git repository because it is not yet
-available from the package registry. To test against a local checkout, temporarily
-replace the `sequince` entry under `[tool.pixi.pypi-dependencies]` in
-`pyproject.toml` with the following, then run `pixi install`:
+Pixi installs Sequince from PyPI. To test against a local checkout, temporarily
+add the following entry under `[tool.pixi.pypi-dependencies]` in `pyproject.toml`,
+then run `pixi install`:
 
 ```toml
 sequince = { path = "../sequince", editable = true }
@@ -186,6 +185,19 @@ not install it. Report expected failures from known upstream bugs explicitly.
 Report the Python, Bilby, and Sequince versions tested, commands and results, and
 any relevant skips or environments that could not be tested. Skipped checks do
 not verify compatibility.
+
+GitHub Actions uses separate lint, test, and publish workflows, following
+Sequince's layout. The lint workflow runs Ruff linting and formatting checks.
+The test workflow runs the `py311`, `py312`, `py313`, `bilby28`, and `bilby-main`
+environments on Linux for pull requests and pushes to `main` and `release*`
+branches. Like Sequince, it uses `xarray-contrib/pixi-lock` to create and cache a
+shared Pixi lock file, restores it for each test job, and runs with `--locked`.
+The resolved lock file is also stored as an artifact.
+The development Bilby environment includes JAX, but not PyTorch or GPU testing.
+Publishing a GitHub release triggers the publish workflow. It builds the source
+distribution and a wheel, validates metadata, and stores the distributions as
+artifacts before publishing to PyPI using trusted publishing and the GitHub
+`release` environment.
 
 ## Commit messages
 

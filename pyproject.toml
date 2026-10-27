@@ -20,7 +20,7 @@ dependencies = [
     "numpy",
     "orng>=0.2.1",
     "pandas",
-    "sequince",
+    "sequince>=0.1.0b1",
 ]
 
 dynamic = ["version"]
@@ -63,8 +63,6 @@ platforms = ["linux-64", "osx-arm64"]
 
 [tool.pixi.pypi-dependencies]
 sequince-bilby = { path = ".", editable = true }
-# Sequince is not yet available from the package registry.
-sequince = { git = "https://github.com/sequince-dev/sequince.git" }
 
 [tool.pixi.environments]
 default = { features = ["py313", "test", "lint"], solve-group = "py313" }
