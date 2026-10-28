@@ -1,0 +1,70 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, release* ]
+  pull_request:
+    branches: [ main, release* ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cache-pixi-lock:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.pixi-lock.outputs.cache-key }}
+      pixi-version: ${{ steps.pixi-lock.outputs.pixi-version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: xarray-contrib/pixi-lock/create-and-cache@1cf6af9f0f4075f75c491fcabb7daa379e7e18be
+        id: pixi-lock
+        with:
+          pixi-version: v0.78.0
+          manifest-path: pyproject.toml
+          hash-files: pyproject.toml
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pixi-lock
+          path: pixi.lock
+          if-no-files-found: error
+
+  tests:
+    name: Pixi ${{ matrix.environment }}
+    needs: cache-pixi-lock
+
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [py311, py312, py313, bilby28, bilby-main]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+    - uses: xarray-contrib/pixi-lock/restore@1cf6af9f0f4075f75c491fcabb7daa379e7e18be
+      with:
+        cache-key: ${{ needs.cache-pixi-lock.outputs.cache-key }}
+        manifest-path: pyproject.toml
+    - uses: prefix-dev/setup-pixi@v0.10.0
+      with:
+        pixi-version: ${{ needs.cache-pixi-lock.outputs.pixi-version }}
+        manifest-path: pyproject.toml
+        run-install: false
+    - name: Report tested versions
+      run: |
+        pixi run --locked -e ${{ matrix.environment }} python - <<'PY'
+        import sys
+        from importlib.metadata import version
+
+        print(sys.version)
+        for package in ("sequince-bilby", "sequince", "bilby"):
+            print(f"{package}: {version(package)}")
+        PY
+    - name: Test with pytest
+      run: pixi run --locked -e ${{ matrix.environment }} test -ra
