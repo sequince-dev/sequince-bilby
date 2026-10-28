@@ -20,7 +20,6 @@ First public beta release.
 - NumPy sampling with released Bilby 2.8, including process-pool support.
 - JAX sampling with vectorized and JIT-compiled likelihood evaluation using
   array-aware development Bilby. PyTorch support is experimental.
-- Examples for NumPy and JAX sampling.
 
 [Unreleased]: https://github.com/sequince-dev/sequince-bilby/compare/v0.1.0b1...HEAD
 [0.1.0b1]: https://github.com/sequince-dev/sequince-bilby/releases/tag/v0.1.0b1
