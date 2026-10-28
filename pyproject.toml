@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "setuptools-scm[toml]>=6.2"]
+requires = ["setuptools>=77", "setuptools-scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,16 +7,18 @@ name = "sequince-bilby"
 authors = [
     {name = "Michael J. Williams", email = "michaeljw1@googlemail.com"},
 ]
-description = ""
+description = "Sequential Monte Carlo for Bilby using Sequince"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
     # Upstream main uses the newer API but reports a 2.8 development version.
     "bilby>=2.8.0.dev0",
+    "h5py>=3",
     "numpy",
     "orng>=0.2.1",
     "pandas",
@@ -24,6 +26,10 @@ dependencies = [
 ]
 
 dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/sequince-dev/sequince-bilby"
+Issues = "https://github.com/sequince-dev/sequince-bilby/issues"
 
 [tool.setuptools_scm]
 
