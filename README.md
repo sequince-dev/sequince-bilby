@@ -1,9 +1,9 @@
 # sequince-bilby
 
-Use [sequince](https://github.com/sequince-dev/sequince)
+Interface and plugin for using [sequince](https://github.com/sequince-dev/sequince)
 with [bilby](https://github.com/bilby-dev/bilby).
 
-Two Bilby samplers are available:
+The plugin provides the following samplers via bilby:
 
 - `sequince-smc`: standard sequential Monte Carlo
 - `sequince-ps`: persistent sampling
